@@ -1,0 +1,5 @@
+node_modules/
+dist/
+agent_memory/
+dev-server.log
+.DS_Store
