@@ -8,8 +8,9 @@ import {
   Printer,
   RotateCcw,
   Sparkles,
+  X,
 } from "lucide-react";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 const lanes = [
   { id: "sales", label: "SALES", cn: "销售", className: "lane-sales" },
@@ -695,6 +696,66 @@ function drawModuleNodePath(node) {
   return `M ${node.moduleX} ${node.moduleY} C ${(node.moduleX + node.x) / 2} ${node.moduleY}, ${(node.moduleX + node.x) / 2} ${node.y}, ${node.x} ${node.y}`;
 }
 
+function buildNetworkNodes() {
+  const modulePointMap = Object.fromEntries(moduleOrbit.map((item) => [item.id, item]));
+  return modules.flatMap((module, moduleIndex) => {
+    const modulePoint = modulePointMap[module.id] || moduleOrbit[moduleIndex];
+    return module.steps.map((step, stepIndex) => {
+      const lane = lanes.find((item) => item.id === step.lane);
+      const point = projectNode(modulePoint, step.lane, stepIndex);
+      return {
+        ...step,
+        laneLabel: lane?.label || step.lane.toUpperCase(),
+        laneClass: lane?.className || "",
+        moduleId: module.id,
+        moduleNo: module.no,
+        moduleTitle: module.title,
+        moduleX: modulePoint.x,
+        moduleY: modulePoint.y,
+        x: point.x,
+        y: point.y,
+      };
+    });
+  });
+}
+
+function createInitialNodePositions() {
+  return Object.fromEntries(buildNetworkNodes().map((node) => [node.id, { x: node.x, y: node.y }]));
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function buildRelatedNodeMap(nodes, links) {
+  const related = new Map(nodes.map((node) => [node.id, new Map()]));
+
+  function addRelation(from, to, weight) {
+    if (!related.has(from) || from === to) return;
+    const current = related.get(from).get(to) || 0;
+    related.get(from).set(to, Math.max(current, weight));
+  }
+
+  links.forEach(([from, to]) => {
+    addRelation(from, to, 0.34);
+    addRelation(to, from, 0.24);
+  });
+
+  modules.forEach((module) => {
+    const ids = module.steps.map((step) => step.id);
+    ids.forEach((from) => {
+      ids.forEach((to) => addRelation(from, to, 0.13));
+    });
+  });
+
+  return Object.fromEntries(
+    Array.from(related.entries()).map(([nodeId, relationMap]) => [
+      nodeId,
+      Array.from(relationMap.entries()).map(([id, weight]) => ({ id, weight })),
+    ])
+  );
+}
+
 const networkLinks = [
   ["inquiry-sales-new", "inquiry-op"],
   ["inquiry-cs-old", "inquiry-op"],
@@ -718,6 +779,7 @@ function App() {
   const [activeModule, setActiveModule] = useState("inquiry");
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [activeFlowIndex, setActiveFlowIndex] = useState(0);
+  const [nodePositions, setNodePositions] = useState(createInitialNodePositions);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -727,35 +789,33 @@ function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    function closeOnEscape(event) {
+      if (event.key === "Escape") setSelectedNodeId(null);
+    }
+
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, []);
+
   const activeLanes = useMemo(
     () => lanes.filter((lane) => visibleLanes.includes(lane.id)),
     [visibleLanes]
   );
 
-  const networkNodes = useMemo(() => {
-    const modulePointMap = Object.fromEntries(moduleOrbit.map((item) => [item.id, item]));
-    return modules.flatMap((module, moduleIndex) => {
-      const laneSeen = {};
-      const modulePoint = modulePointMap[module.id] || moduleOrbit[moduleIndex];
-      return module.steps.map((step, stepIndex) => {
-        laneSeen[step.lane] = (laneSeen[step.lane] || 0) + 1;
-        const lane = lanes.find((item) => item.id === step.lane);
-        const point = projectNode(modulePoint, step.lane, stepIndex);
-        return {
-          ...step,
-          laneLabel: lane?.label || step.lane.toUpperCase(),
-          laneClass: lane?.className || "",
-          moduleId: module.id,
-          moduleNo: module.no,
-          moduleTitle: module.title,
-          moduleX: modulePoint.x,
-          moduleY: modulePoint.y,
-          x: point.x,
-          y: point.y,
-        };
-      });
-    });
-  }, []);
+  const baseNetworkNodes = useMemo(() => buildNetworkNodes(), []);
+  const baseNodeMap = useMemo(
+    () => Object.fromEntries(baseNetworkNodes.map((node) => [node.id, node])),
+    [baseNetworkNodes]
+  );
+  const relatedNodeMap = useMemo(
+    () => buildRelatedNodeMap(baseNetworkNodes, networkLinks),
+    [baseNetworkNodes]
+  );
+  const networkNodes = useMemo(
+    () => baseNetworkNodes.map((node) => ({ ...node, ...(nodePositions[node.id] || { x: node.x, y: node.y }) })),
+    [baseNetworkNodes, nodePositions]
+  );
 
   const networkNodeMap = useMemo(
     () => Object.fromEntries(networkNodes.map((node) => [node.id, node])),
@@ -793,12 +853,41 @@ function App() {
     setVisibleLanes(lanes.map((lane) => lane.id));
     setExpanded(new Set(["sc-cs"]));
     setActiveModule("inquiry");
+    setSelectedNodeId(null);
+    setNodePositions(createInitialNodePositions());
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function printPdf() {
     expandAll();
     window.setTimeout(() => window.print(), 80);
+  }
+
+  function moveNetworkNode(nodeId, point, delta) {
+    setNodePositions((current) => {
+      const next = { ...current, [nodeId]: point };
+      const relatedNodes = relatedNodeMap[nodeId] || [];
+
+      relatedNodes.forEach(({ id, weight }) => {
+        const currentPosition = current[id] || baseNodeMap[id];
+        if (!currentPosition) return;
+        const attraction = 0.035 * weight;
+        next[id] = {
+          x: clamp(
+            currentPosition.x + delta.x * weight + (point.x - currentPosition.x) * attraction,
+            6,
+            94
+          ),
+          y: clamp(
+            currentPosition.y + delta.y * weight + (point.y - currentPosition.y) * attraction,
+            8,
+            92
+          ),
+        };
+      });
+
+      return next;
+    });
   }
 
   return (
@@ -809,10 +898,12 @@ function App() {
         links={networkLinks}
         selectedNodeId={selectedNodeId}
         activeFlowModuleId={activeFlowModuleId}
+        onCloseDetails={() => setSelectedNodeId(null)}
+        onNodeMove={moveNetworkNode}
         onSelect={(node) => {
           const nextModuleId = modules.find((module) => module.steps.some((step) => step.id === node.id))?.id || activeModule;
           const nextFlowIndex = moduleOrbit.findIndex((modulePoint) => modulePoint.id === nextModuleId);
-          setSelectedNodeId(node.id);
+          setSelectedNodeId((current) => (current === node.id ? null : node.id));
           setActiveModule(nextModuleId);
           if (nextFlowIndex >= 0) setActiveFlowIndex(nextFlowIndex);
         }}
@@ -1038,13 +1129,84 @@ function CompleteFlowChart() {
   );
 }
 
-function NetworkMap({ nodes, nodeMap, links, selectedNodeId, activeFlowModuleId, onSelect, onPrint }) {
+function NetworkMap({ nodes, nodeMap, links, selectedNodeId, activeFlowModuleId, onSelect, onCloseDetails, onNodeMove, onPrint }) {
   const selectedNode = selectedNodeId ? nodeMap[selectedNodeId] : null;
   const selectedModule = selectedNode ? modules.find((module) => module.id === selectedNode.moduleId) : null;
   const selectedSop = selectedModule ? moduleSopDetails[selectedModule.id] : null;
   const selectedRunbook = selectedNode ? getNodeRunbook(selectedNode) : null;
   const activeFlowModule = modules.find((module) => module.id === activeFlowModuleId);
   const activeFlowIndex = moduleOrbit.findIndex((modulePoint) => modulePoint.id === activeFlowModuleId);
+  const stageRef = useRef(null);
+  const dragStateRef = useRef(null);
+  const [draggingNodeId, setDraggingNodeId] = useState(null);
+
+  function getStagePoint(event) {
+    const rect = stageRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return {
+      x: clamp(((event.clientX - rect.left) / rect.width) * 100, 5.5, 94.5),
+      y: clamp(((event.clientY - rect.top) / rect.height) * 100, 7, 93),
+    };
+  }
+
+  function startNodeDrag(event, node) {
+    if (event.button !== undefined && event.button !== 0) return;
+    const point = getStagePoint(event);
+    if (!point) return;
+    dragStateRef.current = {
+      id: node.id,
+      pointerId: event.pointerId,
+      lastPoint: point,
+      moved: false,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setDraggingNodeId(node.id);
+  }
+
+  function moveDraggedNode(event) {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const point = getStagePoint(event);
+    if (!point) return;
+    const delta = {
+      x: point.x - drag.lastPoint.x,
+      y: point.y - drag.lastPoint.y,
+    };
+    if (Math.abs(delta.x) < 0.04 && Math.abs(delta.y) < 0.04) return;
+
+    drag.moved = true;
+    drag.lastPoint = point;
+    event.preventDefault();
+    onNodeMove(drag.id, point, delta);
+  }
+
+  function endNodeDrag(event) {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (drag.moved) {
+      event.preventDefault();
+      event.stopPropagation();
+      const draggedId = drag.id;
+      const suppressReleaseClick = (clickEvent) => {
+        const clickedNode = clickEvent.target instanceof Element
+          ? clickEvent.target.closest("[data-testid]")
+          : null;
+        if (clickedNode?.dataset.testid === `network-node-${draggedId}`) {
+          clickEvent.preventDefault();
+          clickEvent.stopImmediatePropagation();
+        }
+        window.removeEventListener("click", suppressReleaseClick, true);
+      };
+      window.addEventListener("click", suppressReleaseClick, true);
+      window.setTimeout(() => window.removeEventListener("click", suppressReleaseClick, true), 180);
+    }
+    dragStateRef.current = null;
+    setDraggingNodeId(null);
+  }
+
+  function handleNodeClick(node) {
+    onSelect(node);
+  }
 
   return (
     <section className="constellation" aria-label="星空网络流程总览">
@@ -1076,7 +1238,13 @@ function NetworkMap({ nodes, nodeMap, links, selectedNodeId, activeFlowModuleId,
         </div>
       </div>
 
-      <div className="constellation-stage">
+      <div
+        className={`constellation-stage ${draggingNodeId ? "is-dragging" : ""}`}
+        ref={stageRef}
+        onPointerMove={moveDraggedNode}
+        onPointerUp={endNodeDrag}
+        onPointerCancel={endNodeDrag}
+      >
         <svg className="network-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           <defs>
             <marker id="stellar-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
@@ -1132,60 +1300,6 @@ function NetworkMap({ nodes, nodeMap, links, selectedNodeId, activeFlowModuleId,
               />
             );
           })}
-          {moduleOrbit.map((modulePoint, index) => (
-            <circle
-              key={`hub-particle-${modulePoint.id}`}
-              className={`flow-particle hub-particle ${activeFlowModuleId === modulePoint.id ? "is-active" : ""}`}
-              r="0.42"
-            >
-              <animateMotion dur="2.4s" begin={`${index * 0.08}s`} repeatCount="indefinite" rotate="auto">
-                <mpath href={`#hub-flow-${modulePoint.id}`} />
-              </animateMotion>
-            </circle>
-          ))}
-          {moduleOrbit.slice(0, -1).map((modulePoint, index) => {
-            const nextPoint = moduleOrbit[index + 1];
-            const isActive = index === activeFlowIndex || index + 1 === activeFlowIndex;
-            return (
-              <circle
-                key={`sequence-particle-${modulePoint.id}-${nextPoint.id}`}
-                className={`flow-particle sequence-particle ${isActive ? "is-active" : ""}`}
-                r="0.38"
-              >
-                <animateMotion dur="2.9s" begin={`${index * 0.12}s`} repeatCount="indefinite" rotate="auto">
-                  <mpath href={`#sequence-flow-${modulePoint.id}-${nextPoint.id}`} />
-                </animateMotion>
-              </circle>
-            );
-          })}
-          {nodes.map((node, index) => (
-            <circle
-              key={`module-particle-${node.id}`}
-              className={`flow-particle module-particle ${node.moduleId === activeFlowModuleId ? "is-active" : ""}`}
-              r="0.34"
-            >
-              <animateMotion dur="1.9s" begin={`${index * 0.04}s`} repeatCount="indefinite" rotate="auto">
-                <mpath href={`#module-flow-${node.id}`} />
-              </animateMotion>
-            </circle>
-          ))}
-          {links.map(([from, to, mode], index) => {
-            const start = nodeMap[from];
-            const end = nodeMap[to];
-            if (!start || !end) return null;
-            const isActive = start.moduleId === activeFlowModuleId || end.moduleId === activeFlowModuleId;
-            return (
-              <circle
-                key={`transfer-particle-${from}-${to}-${index}`}
-                className={`flow-particle transfer-particle ${mode ? `particle-${mode}` : ""} ${isActive ? "is-active" : ""}`}
-                r="0.36"
-              >
-                <animateMotion dur="2.2s" begin={`${index * 0.09}s`} repeatCount="indefinite" rotate="auto">
-                  <mpath href={`#transfer-flow-${from}-${to}-${index}`} />
-                </animateMotion>
-              </circle>
-            );
-          })}
         </svg>
 
         <div className="stellar-core" style={{ left: `${orbitCenter.x}%`, top: `${orbitCenter.y}%` }}>
@@ -1224,9 +1338,13 @@ function NetworkMap({ nodes, nodeMap, links, selectedNodeId, activeFlowModuleId,
             key={node.id}
             type="button"
             data-testid={`network-node-${node.id}`}
-            className={`star-node ${node.laneClass} node-${node.type} ${node.moduleId === activeFlowModuleId ? "is-flow-active" : ""} ${selectedNode?.id === node.id ? "is-selected" : ""}`}
+            draggable={false}
+            className={`star-node ${node.laneClass} node-${node.type} ${node.moduleId === activeFlowModuleId ? "is-flow-active" : ""} ${draggingNodeId === node.id ? "is-dragging" : ""} ${selectedNode?.id === node.id ? "is-selected" : ""}`}
             style={{ left: `${node.x}%`, top: `${node.y}%`, animationDelay: `${180 + index * 48}ms` }}
-            onClick={() => onSelect(node)}
+            onPointerDown={(event) => startNodeDrag(event, node)}
+            onPointerUp={endNodeDrag}
+            onPointerCancel={endNodeDrag}
+            onClick={() => handleNodeClick(node)}
             aria-pressed={selectedNode?.id === node.id}
           >
             <span className="star-dot" />
@@ -1240,6 +1358,9 @@ function NetworkMap({ nodes, nodeMap, links, selectedNodeId, activeFlowModuleId,
 
       {selectedNode && (
         <aside className={`constellation-detail ${selectedNode.laneClass}`}>
+          <button type="button" className="detail-close" onClick={onCloseDetails} aria-label="关闭节点详情">
+            <X size={18} aria-hidden="true" />
+          </button>
           <div>
             <span>{selectedNode.moduleNo} · {selectedNode.moduleTitle}</span>
             <h2>{selectedNode.title}</h2>

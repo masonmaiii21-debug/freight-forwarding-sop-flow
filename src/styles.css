@@ -169,6 +169,7 @@ button {
   position: absolute;
   inset: 192px 28px 30px;
   z-index: 2;
+  touch-action: none;
 }
 
 .network-lines {
@@ -177,7 +178,6 @@ button {
   width: 100%;
   height: 100%;
   color: rgba(187, 228, 255, 0.58);
-  filter: drop-shadow(0 0 8px rgba(134, 214, 255, 0.25));
 }
 
 .network-link {
@@ -235,7 +235,6 @@ button {
   color: rgba(207, 244, 255, 0.98);
   stroke-width: 0.24;
   stroke-dasharray: 1.25 0.62;
-  filter: drop-shadow(0 0 7px rgba(137, 222, 255, 0.72));
   animation: line-in 900ms ease both, flow-line 2s linear infinite;
 }
 
@@ -255,41 +254,6 @@ button {
 
 .link-handoff.is-active {
   color: rgba(154, 255, 224, 0.98);
-}
-
-.flow-particle {
-  fill: rgba(187, 228, 255, 0.68);
-  opacity: 0.18;
-  pointer-events: none;
-  filter: drop-shadow(0 0 5px rgba(159, 236, 255, 0.62));
-  transition: opacity 180ms ease, fill 180ms ease;
-}
-
-.flow-particle.is-active {
-  fill: #effcff;
-  opacity: 1;
-  filter: drop-shadow(0 0 8px rgba(170, 242, 255, 0.95)) drop-shadow(0 0 18px rgba(80, 169, 255, 0.42));
-}
-
-.sequence-particle {
-  fill: rgba(158, 246, 255, 0.72);
-}
-
-.module-particle {
-  fill: rgba(185, 222, 255, 0.72);
-}
-
-.transfer-particle {
-  fill: rgba(255, 225, 166, 0.76);
-}
-
-.particle-handoff {
-  fill: rgba(166, 255, 228, 0.82);
-}
-
-.particle-feedback,
-.particle-exception {
-  fill: rgba(255, 205, 124, 0.84);
 }
 
 .constellation-lane-label {
@@ -471,14 +435,17 @@ button {
   border-radius: 8px;
   background: rgba(3, 8, 19, 0.9);
   color: #f7fbff;
-  cursor: pointer;
+  cursor: grab;
   text-align: left;
   transform: translate(-50%, -50%) scale(0.94);
   opacity: 0;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03), 0 16px 36px rgba(0, 0, 0, 0.34);
   backdrop-filter: blur(12px);
   animation: star-in 520ms ease both;
-  transition: border-color 180ms ease, background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+  touch-action: none;
+  user-select: none;
+  transition: left 100ms ease, top 100ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+  will-change: left, top, transform;
 }
 
 .star-node::before {
@@ -499,6 +466,16 @@ button {
   transform: translate(-50%, -50%) scale(1.03);
   border-color: rgba(255, 255, 255, 0.58);
   box-shadow: 0 0 30px rgba(137, 222, 255, 0.2), 0 18px 42px rgba(0, 0, 0, 0.28);
+}
+
+.star-node.is-dragging {
+  z-index: 10;
+  cursor: grabbing;
+  transform: translate(-50%, -50%) scale(1.08);
+  transition: none;
+  animation: none;
+  border-color: rgba(219, 250, 255, 0.9);
+  box-shadow: 0 0 42px rgba(137, 222, 255, 0.34), 0 20px 54px rgba(0, 0, 0, 0.42);
 }
 
 .star-node.is-flow-active {
@@ -592,6 +569,8 @@ button {
   grid-template-columns: minmax(240px, 360px) minmax(260px, 420px);
   gap: 14px;
   max-width: min(820px, calc(100vw - 48px));
+  max-height: min(68vh, 620px);
+  overflow: auto;
   padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 8px;
@@ -600,6 +579,29 @@ button {
   box-shadow: 0 22px 70px rgba(0, 0, 0, 0.32);
   backdrop-filter: blur(18px);
   animation: fade-up 620ms ease 420ms both;
+}
+
+.detail-close {
+  position: sticky;
+  top: 0;
+  grid-column: 1 / -1;
+  justify-self: end;
+  z-index: 2;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  margin: -4px -4px -4px 0;
+  place-items: center;
+  border: 1px solid rgba(219, 238, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f7fbff;
+  cursor: pointer;
+}
+
+.detail-close:hover {
+  border-color: rgba(219, 238, 255, 0.5);
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .constellation-detail span {
@@ -664,11 +666,15 @@ button {
 .detail-shell {
   padding: 22px;
   background: var(--bg);
+  content-visibility: auto;
+  contain-intrinsic-size: 1000px;
 }
 
 .complete-flow {
   padding: 26px 22px 34px;
   background: #eef3f8;
+  content-visibility: auto;
+  contain-intrinsic-size: 1200px;
 }
 
 .complete-flow-header {
@@ -1514,6 +1520,11 @@ h1 {
 
   .complete-flow {
     background: #fff;
+    content-visibility: visible;
+  }
+
+  .detail-shell {
+    content-visibility: visible;
   }
 
   .complete-flow-card {
